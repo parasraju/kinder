@@ -5,6 +5,7 @@ import { all, get, nowIso, run } from "../db";
 import { badRequest, notFound, pagination, validate } from "../http";
 import { mapFinding, mapScan, type FindingRow, type ScanRow } from "../mappers";
 import { createDemoScan } from "../services/demo";
+import { createGithubIssue, GitHubError } from "../services/github";
 import { githubTokenForUser, runCodeSearchScan, runGithubScan, runningScans } from "../services/scanner";
 
 const router = Router();
@@ -190,6 +191,84 @@ router.patch("/findings/:id", attachUser, (req, res) => {
   run("UPDATE findings SET status = ? WHERE id = ?", input.status, id);
   const updated = get<FindingRow>("SELECT * FROM findings WHERE id = ?", id)!;
   res.json({ item: mapFinding(updated) });
+});
+
+router.post("/findings/:id/report", attachUser, (req, res) => {
+  const user = requireUser(req);
+  const id = Number(req.params.id);
+  const finding = get<FindingRow>(
+    "SELECT * FROM findings WHERE id = ? AND user_id = ?",
+    id,
+    user.id,
+  );
+  if (!finding) throw notFound("Finding not found.");
+
+  if (!/^[\w.-]+\/[\w.-]+$/.test(finding.repo)) {
+    throw badRequest("This finding does not belong to a valid GitHub repository.");
+  }
+
+  const github = githubTokenForUser(user.id);
+  if (!github?.token) {
+    throw badRequest(
+      "No GitHub token connected. Connect your GitHub account in Settings → Integrations to report issues.",
+    );
+  }
+
+  const title = `Security Alert: Potential ${finding.provider_name} key exposure in \`${finding.file_path}\``;
+  const body = [
+    `### ⚠️ Potential Secret Exposure Detected`,
+    ``,
+    `Kinder detected what appears to be an exposed **${finding.provider_name}** credential in this repository:`,
+    ``,
+    `- **Repository:** \`${finding.repo}\``,
+    `- **File:** \`${finding.file_path}\` (line ${finding.line})`,
+    `- **Severity:** **${finding.severity.toUpperCase()}**`,
+    `- **Rule:** \`${finding.rule_id}\``,
+    `- **Masked Value:** \`${finding.masked_value}\``,
+    ``,
+    `#### 📋 Redacted Context`,
+    `\`\`\``,
+    finding.snippet,
+    `\`\`\``,
+    ``,
+    `#### 🛡️ Recommended Remediation Steps`,
+    `1. **Rotate the credential immediately:** Invalidate the exposed key in your ${finding.provider_name} developer console and issue a new secret.`,
+    `2. **Remove the secret from Git history:** Simply editing or deleting the file in subsequent commits still leaves the secret exposed in the commit history. Consider using [git-filter-repo](https://github.com/newren/git-filter-repo) or [BFG Repo-Cleaner](https://rtyley.github.io/bfg-repo-cleaner/) to remove it from past commits.`,
+    `3. **Store in Environment Variables:** Move sensitive keys to uncommitted environment files (ensure \`.env\` is listed in \`.gitignore\`) or a secret manager.`,
+    ``,
+    `---`,
+    `*Reported via [Kinder](https://github.com/parasraju/kinder) — key hygiene & workspace security.*`,
+  ].join("\n");
+
+  void (async () => {
+    try {
+      const issue = await createGithubIssue(github.token, finding.repo, title, body);
+      const now = nowIso();
+      run(
+        "UPDATE findings SET issue_url = ?, reported_at = ? WHERE id = ?",
+        issue.htmlUrl,
+        now,
+        id,
+      );
+      const updated = get<FindingRow>("SELECT * FROM findings WHERE id = ?", id)!;
+      res.json({
+        ok: true,
+        issueUrl: issue.htmlUrl,
+        issueNumber: issue.number,
+        item: mapFinding(updated),
+      });
+    } catch (error) {
+      if (error instanceof GitHubError) {
+        res.status(error.status >= 400 && error.status < 500 ? error.status : 502).json({
+          error: { code: "github_issue_failed", message: error.message },
+        });
+        return;
+      }
+      res.status(500).json({
+        error: { code: "internal_error", message: "Failed to report issue on GitHub." },
+      });
+    }
+  })();
 });
 
 export default router;

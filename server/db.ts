@@ -136,6 +136,13 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       );
     `,
   },
+  {
+    version: 2,
+    sql: `
+      ALTER TABLE findings ADD COLUMN issue_url TEXT;
+      ALTER TABLE findings ADD COLUMN reported_at TEXT;
+    `,
+  },
 ];
 
 function migrate(): void {

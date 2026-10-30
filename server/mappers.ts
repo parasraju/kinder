@@ -36,6 +36,8 @@ export interface FindingRow {
   rule_id: string;
   first_seen_at: string;
   last_seen_at: string;
+  issue_url?: string | null;
+  reported_at?: string | null;
 }
 
 export interface CredentialRow {
@@ -112,6 +114,8 @@ export function mapFinding(row: FindingRow): Finding {
     ruleId: row.rule_id,
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
+    issueUrl: row.issue_url ?? null,
+    reportedAt: row.reported_at ?? null,
   };
 }
 

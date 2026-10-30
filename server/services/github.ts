@@ -342,3 +342,73 @@ export async function getRawFileContent(
   if (buffer.byteLength > maxBytes) return null;
   return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
 }
+
+/**
+ * Create an issue on a GitHub repository using the user's token.
+ */
+export async function createGithubIssue(
+  token: string,
+  repo: string,
+  title: string,
+  body: string,
+): Promise<{ id: number; number: number; htmlUrl: string }> {
+  let response: Response;
+  try {
+    response = await fetch(`${GITHUB_API}/repos/${repo}/issues`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({ title, body }),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch {
+    throw new GitHubError("Could not reach GitHub. Check your network connection and retry.", 502);
+  }
+
+  const data = (await response.json().catch(() => ({}))) as {
+    message?: string;
+    id?: number;
+    number?: number;
+    html_url?: string;
+  };
+
+  if (response.ok && data.html_url && data.number) {
+    return {
+      id: data.id ?? data.number,
+      number: data.number,
+      htmlUrl: data.html_url,
+    };
+  }
+
+  if (response.status === 401) {
+    throw new GitHubError("GitHub rejected your token. Check your token in Settings → Integrations.", 401);
+  }
+  if (response.status === 403 || response.status === 429) {
+    const isRateLimited = response.headers.get("x-ratelimit-remaining") === "0" || response.status === 429;
+    throw new GitHubError(
+      data.message ||
+        "GitHub refused to create an issue. Ensure your token has 'public_repo' or 'repo' scope, or write access to issues.",
+      response.status,
+      isRateLimited,
+    );
+  }
+  if (response.status === 404) {
+    throw new GitHubError(`Repository "${repo}" not found or your token cannot access it.`, 404);
+  }
+  if (response.status === 410) {
+    throw new GitHubError(`Issues are disabled in repository "${repo}".`, 410);
+  }
+  if (response.status === 422) {
+    throw new GitHubError(data.message || "GitHub rejected the issue contents.", 422);
+  }
+
+  throw new GitHubError(
+    data.message || `GitHub returned ${response.status} when creating the issue.`,
+    response.status,
+  );
+}

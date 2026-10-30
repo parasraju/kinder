@@ -155,6 +155,8 @@ export interface Finding {
   ruleId: string;
   firstSeenAt: string;
   lastSeenAt: string;
+  issueUrl?: string | null;
+  reportedAt?: string | null;
 }
 
 export interface GitHubConnection {

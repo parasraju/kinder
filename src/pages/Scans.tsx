@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  CheckCircle2,
   ExternalLink,
   Flag,
   Github,
@@ -61,15 +62,22 @@ function FindingModal({
   onClose,
   onUpdate,
   updating,
+  onReport,
+  reporting,
+  hasGithubToken,
 }: {
   finding: Finding | null;
   onClose: () => void;
   onUpdate: (status: FindingStatus) => void;
   updating: boolean;
+  onReport: (finding: Finding) => void;
+  reporting: boolean;
+  hasGithubToken: boolean;
 }) {
   if (!finding) return null;
   const next = NEXT_STATUS[finding.status];
-  const githubUrl = /^[\w.-]+\/[\w.-]+$/.test(finding.repo)
+  const isRepoValid = /^[\w.-]+\/[\w.-]+$/.test(finding.repo);
+  const githubUrl = isRepoValid
     ? `https://github.com/${finding.repo}/blob/HEAD/${finding.filePath.split("/").map(encodeURIComponent).join("/")}#L${finding.line}`
     : null;
 
@@ -87,16 +95,55 @@ function FindingModal({
               variant="ghost"
               className="mr-auto"
               onClick={() => onUpdate("dismissed")}
-              disabled={updating}
+              disabled={updating || reporting}
             >
               Dismiss
             </Button>
+          ) : (
+            <div className="mr-auto" />
+          )}
+
+          {isRepoValid ? (
+            finding.issueUrl ? (
+              <Button
+                variant="secondary"
+                onClick={() => window.open(finding.issueUrl!, "_blank", "noreferrer")}
+                className="gap-1.5"
+                title="Open the created issue on GitHub"
+              >
+                <Github className="h-3.5 w-3.5" />
+                <span>View Issue</span>
+                <ExternalLink className="h-3 w-3 opacity-60" />
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                onClick={() => onReport(finding)}
+                loading={reporting}
+                disabled={updating}
+                className="gap-1.5 border-rust/35 text-rust hover:bg-rust-soft hover:text-rust"
+                title={
+                  hasGithubToken
+                    ? "Automatically report this finding as an issue on GitHub"
+                    : "Connect GitHub in Settings → Integrations first"
+                }
+              >
+                <Github className="h-3.5 w-3.5" />
+                <span>Report Issue</span>
+              </Button>
+            )
           ) : null}
-          <Button variant="secondary" onClick={onClose}>
+
+          <Button variant="secondary" onClick={onClose} disabled={reporting}>
             Close
           </Button>
           {next ? (
-            <Button variant="primary" loading={updating} onClick={() => onUpdate(next)}>
+            <Button
+              variant="primary"
+              loading={updating}
+              disabled={reporting}
+              onClick={() => onUpdate(next)}
+            >
               {STATUS_LABEL[finding.status]}
             </Button>
           ) : null}
@@ -110,8 +157,37 @@ function FindingModal({
           <Badge tone={finding.status === "open" ? "rust" : finding.status === "acknowledged" ? "amber" : "positive"}>
             {finding.status}
           </Badge>
+          {finding.issueUrl ? (
+            <span className="inline-flex items-center gap-1 rounded-md border border-positive/30 bg-positive-soft px-2 py-0.5 text-[11px] font-medium text-positive">
+              <CheckCircle2 className="h-3 w-3" />
+              Issue reported
+            </span>
+          ) : null}
           <span className="mono ml-auto text-[11px] text-faint">{finding.ruleId}</span>
         </div>
+
+        {finding.issueUrl ? (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-positive/30 bg-positive-soft/80 px-3.5 py-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-positive" />
+              <div className="min-w-0 text-[12px]">
+                <p className="font-medium text-ink">Reported on GitHub</p>
+                <p className="truncate text-[11px] text-muted">
+                  Issue created in {finding.repo} with your GitHub token.
+                </p>
+              </div>
+            </div>
+            <a
+              href={finding.issueUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-moss-ink hover:underline underline-offset-4"
+            >
+              Open issue
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        ) : null}
 
         <div>
           <p className="text-[12px] font-medium text-ink-soft">Matched value (masked)</p>
@@ -233,6 +309,22 @@ export function ScansPage() {
       void queryClient.invalidateQueries({ queryKey: ["overview"] });
     },
     onError: () => toast("Could not update the finding", "error"),
+  });
+
+  const report = useMutation({
+    mutationFn: (f: Finding) => scansApi.reportFinding(f.id),
+    onSuccess: ({ issueNumber, item }) => {
+      toast(`Issue #${issueNumber} opened on ${item.repo}!`);
+      setSelected(item);
+      void queryClient.invalidateQueries({ queryKey: ["findings"] });
+      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
+    onError: (error) => {
+      toast(
+        error instanceof Error ? error.message : "Could not create issue on GitHub",
+        "error",
+      );
+    },
   });
 
   const allScans = scans.data?.items ?? [];
@@ -543,6 +635,15 @@ export function ScansPage() {
                       >
                         {finding.status}
                       </Badge>
+                      {finding.issueUrl ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-md border border-positive/30 bg-positive-soft px-1.5 py-0.5 text-[10.5px] font-medium text-positive"
+                          title="Issue reported on GitHub"
+                        >
+                          <Github className="h-2.5 w-2.5" />
+                          Reported
+                        </span>
+                      ) : null}
                     </div>
                     <p className="mono truncate text-[11px] text-muted">
                       {finding.repo}/{finding.filePath}:{finding.line}
@@ -601,6 +702,15 @@ export function ScansPage() {
           selected ? update.mutate({ id: selected.id, next }) : undefined
         }
         updating={update.isPending}
+        onReport={(f) => {
+          if (!connected) {
+            toast("Connect your GitHub account in Settings → Integrations first.", "error");
+            return;
+          }
+          report.mutate(f);
+        }}
+        reporting={report.isPending}
+        hasGithubToken={connected}
       />
     </div>
   );
