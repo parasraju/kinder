@@ -64,15 +64,13 @@ function FindingModal({
   updating,
   onReport,
   reporting,
-  hasGithubToken,
 }: {
   finding: Finding | null;
   onClose: () => void;
   onUpdate: (status: FindingStatus) => void;
   updating: boolean;
-  onReport: (finding: Finding) => void;
+  onReport: (finding: Finding, token: string) => void;
   reporting: boolean;
-  hasGithubToken: boolean;
 }) {
   if (!finding) return null;
   const next = NEXT_STATUS[finding.status];
@@ -80,6 +78,16 @@ function FindingModal({
   const githubUrl = isRepoValid
     ? `https://github.com/${finding.repo}/blob/HEAD/${finding.filePath.split("/").map(encodeURIComponent).join("/")}#L${finding.line}`
     : null;
+
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [reportToken, setReportToken] = useState(() => {
+    try {
+      return localStorage.getItem("kinder_report_token") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [remember, setRemember] = useState(true);
 
   return (
     <Modal
@@ -118,15 +126,10 @@ function FindingModal({
             ) : (
               <Button
                 variant="secondary"
-                onClick={() => onReport(finding)}
-                loading={reporting}
-                disabled={updating}
+                onClick={() => setShowPrompt((current) => !current)}
+                disabled={updating || reporting}
                 className="gap-1.5 border-rust/35 text-rust hover:bg-rust-soft hover:text-rust"
-                title={
-                  hasGithubToken
-                    ? "Automatically report this finding as an issue on GitHub"
-                    : "Connect GitHub in Settings → Integrations first"
-                }
+                title="Report this finding by creating an issue on GitHub"
               >
                 <Github className="h-3.5 w-3.5" />
                 <span>Report Issue</span>
@@ -229,6 +232,96 @@ function FindingModal({
           </ol>
         </div>
 
+        {showPrompt && !finding.issueUrl ? (
+          <div className="rounded-xl border border-line-strong bg-surface-2/95 p-4 space-y-3 animate-rise">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="grid h-7 w-7 place-items-center rounded-lg bg-moss text-[var(--on-moss)]">
+                  <Github className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-[13px] font-semibold text-ink">GitHub Token for Reporting</p>
+                  <p className="text-[11.5px] text-muted">
+                    Opens an issue in <span className="mono font-medium text-ink">{finding.repo}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPrompt(false)}
+                className="text-[12px] text-faint hover:text-ink"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <p className="text-[12px] leading-relaxed text-muted">
+              The main search token usually only has read access (which causes <em>&ldquo;Resource not accessible through token&rdquo;</em>). Enter a Personal Access Token with <span className="mono font-semibold text-ink">public_repo</span> or <span className="mono font-semibold text-ink">repo</span> scope (or fine-grained Issues write access).
+            </p>
+
+            <div className="space-y-1.5">
+              <Input
+                type="password"
+                placeholder="ghp_... or github_pat_..."
+                value={reportToken}
+                onChange={(e) => setReportToken(e.target.value)}
+                autoFocus
+                className="mono text-[12px]"
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[11px]">
+                <a
+                  href="https://github.com/settings/tokens/new?scopes=public_repo&description=Kinder+Security+Reporting"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-medium text-moss-ink hover:underline underline-offset-4"
+                >
+                  Generate token on GitHub <ExternalLink className="h-2.5 w-2.5" />
+                </a>
+                <label className="flex items-center gap-1.5 text-muted hover:text-ink cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={remember}
+                    onChange={(e) => setRemember(e.target.checked)}
+                    className="rounded border-line"
+                  />
+                  Remember token for this session
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1 border-t border-line/60">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowPrompt(false)}
+                disabled={reporting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={reporting}
+                disabled={!reportToken.trim()}
+                onClick={() => {
+                  if (remember) {
+                    try {
+                      localStorage.setItem("kinder_report_token", reportToken.trim());
+                    } catch {
+                      // ignore
+                    }
+                  }
+                  onReport(finding, reportToken.trim());
+                }}
+                className="gap-1.5"
+              >
+                <Github className="h-3.5 w-3.5" />
+                Report & Create Issue
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
         {githubUrl ? (
           <a
             href={githubUrl}
@@ -312,7 +405,8 @@ export function ScansPage() {
   });
 
   const report = useMutation({
-    mutationFn: (f: Finding) => scansApi.reportFinding(f.id),
+    mutationFn: ({ finding, token }: { finding: Finding; token: string }) =>
+      scansApi.reportFinding(finding.id, token),
     onSuccess: ({ issueNumber, item }) => {
       toast(`Issue #${issueNumber} opened on ${item.repo}!`);
       setSelected(item);
@@ -702,15 +796,8 @@ export function ScansPage() {
           selected ? update.mutate({ id: selected.id, next }) : undefined
         }
         updating={update.isPending}
-        onReport={(f) => {
-          if (!connected) {
-            toast("Connect your GitHub account in Settings → Integrations first.", "error");
-            return;
-          }
-          report.mutate(f);
-        }}
+        onReport={(finding, token) => report.mutate({ finding, token })}
         reporting={report.isPending}
-        hasGithubToken={connected}
       />
     </div>
   );

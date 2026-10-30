@@ -207,10 +207,16 @@ router.post("/findings/:id/report", attachUser, (req, res) => {
     throw badRequest("This finding does not belong to a valid GitHub repository.");
   }
 
-  const github = githubTokenForUser(user.id);
-  if (!github?.token) {
+  const explicitToken =
+    typeof req.body?.token === "string" && req.body.token.trim().length > 0
+      ? req.body.token.trim()
+      : null;
+  const storedGithub = githubTokenForUser(user.id);
+  const token = explicitToken || storedGithub?.token;
+
+  if (!token) {
     throw badRequest(
-      "No GitHub token connected. Connect your GitHub account in Settings → Integrations to report issues.",
+      "No GitHub token provided. Please enter a GitHub personal access token with permissions to open issues.",
     );
   }
 
@@ -242,7 +248,7 @@ router.post("/findings/:id/report", attachUser, (req, res) => {
 
   void (async () => {
     try {
-      const issue = await createGithubIssue(github.token, finding.repo, title, body);
+      const issue = await createGithubIssue(token, finding.repo, title, body);
       const now = nowIso();
       run(
         "UPDATE findings SET issue_url = ?, reported_at = ? WHERE id = ?",

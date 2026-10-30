@@ -186,10 +186,10 @@ export const scansApi = {
   },
   updateFinding: (id: number, status: FindingStatus) =>
     request<{ item: Finding }>(`/scans/findings/${id}`, { method: "PATCH", body: json({ status }) }),
-  reportFinding: (id: number) =>
+  reportFinding: (id: number, token?: string) =>
     request<{ ok: boolean; issueUrl: string; issueNumber: number; item: Finding }>(
       `/scans/findings/${id}/report`,
-      { method: "POST" },
+      { method: "POST", body: json({ token: token?.trim() || undefined }) },
     ),
 };
 

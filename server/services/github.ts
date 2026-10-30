@@ -390,9 +390,13 @@ export async function createGithubIssue(
   }
   if (response.status === 403 || response.status === 429) {
     const isRateLimited = response.headers.get("x-ratelimit-remaining") === "0" || response.status === 429;
+    let message = data.message || "GitHub refused to create an issue.";
+    if (message.toLowerCase().includes("resource not accessible")) {
+      message =
+        "Resource not accessible with this token. GitHub requires a token with 'public_repo' or 'repo' scope (or fine-grained Issues write permission).";
+    }
     throw new GitHubError(
-      data.message ||
-        "GitHub refused to create an issue. Ensure your token has 'public_repo' or 'repo' scope, or write access to issues.",
+      message,
       response.status,
       isRateLimited,
     );
